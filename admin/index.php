@@ -1,11 +1,8 @@
-
 <?php
 session_start();
 require_once __DIR__ . '/../config/database.php';
+$conn->set_charset("utf8mb4");
 
-/* =========================
-   FUNGSI DASAR
-========================= */
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
@@ -14,270 +11,245 @@ function e($value) {
     return htmlspecialchars((string)($value ?? ''), ENT_QUOTES, 'UTF-8');
 }
 
-function csrf_check() {
-    $token = $_POST['csrf_token'] ?? '';
-
-    if (
-        !is_string($token) ||
-        !hash_equals($_SESSION['csrf_token'] ?? '', $token)
-    ) {
-        http_response_code(403);
-        exit('Permintaan tidak valid. Silakan muat ulang halaman.');
+function go($message = '', $type = 'success') {
+    if ($message !== '') {
+        $_SESSION['flash'] = ['message' => $message, 'type' => $type];
     }
-}
-
-function redirect_admin($url = 'index.php') {
-    header('Location: ' . $url);
+    header('Location: index.php');
     exit;
 }
 
-$pesan = '';
-$error = '';
-$action = $_GET['action'] ?? 'dashboard';
+function checkCsrf() {
+    $token = $_POST['csrf_token'] ?? '';
+    if (!is_string($token) || !hash_equals($_SESSION['csrf_token'], $token)) {
+        http_response_code(403);
+        exit('Token keamanan tidak valid. Muat ulang halaman dan coba lagi.');
+    }
+}
 
-/* =========================
-   PROSES FORM
-========================= */
+function getWisata($conn, $id) {
+    $stmt = $conn->prepare("SELECT * FROM wisata WHERE id = ? LIMIT 1");
+    $stmt->bind_param("i", $id);
+    $stmt->execute();
+    $data = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    return $data;
+}
+
+function val($key) {
+    return trim((string)($_POST[$key] ?? ''));
+}
+
+$isLoggedIn = !empty($_SESSION['admin_id']);
+$action = $_POST['action'] ?? '';
+
+/* PROSES FORM */
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    csrf_check();
+    checkCsrf();
 
-    $aksi = $_POST['action'] ?? '';
-
-    /* LOGIN */
-    if ($aksi === 'login') {
-        $username = trim($_POST['username'] ?? '');
-        $password = $_POST['password'] ?? '';
+    if ($action === 'login') {
+        $username = val('username');
+        $password = (string)($_POST['password'] ?? '');
 
         $stmt = $conn->prepare(
             "SELECT id, username, password FROM admin WHERE username = ? LIMIT 1"
         );
-        $stmt->bind_param('s', $username);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        $admin = $result->fetch_assoc();
-        $stmt->close();
-
-        if ($admin && password_verify($password, $admin['password'])) {
-            session_regenerate_id(true);
-            $_SESSION['admin_id'] = $admin['id'];
-            $_SESSION['admin_username'] = $admin['username'];
-
-            redirect_admin();
-        } else {
-            $error = 'Username atau password salah.';
-            $action = 'login';
-        }
-    }
-
-    /* LOGOUT */
-    elseif ($aksi === 'logout') {
-        $_SESSION = [];
-        session_destroy();
-        redirect_admin();
-    }
-
-    /* HARUS LOGIN UNTUK AKSI SELANJUTNYA */
-    elseif (empty($_SESSION['admin_id'])) {
-        redirect_admin('index.php?action=login');
-    }
-
-    /* TAMBAH WISATA */
-    elseif ($aksi === 'tambah') {
-        $nama = trim($_POST['nama'] ?? '');
-        $lokasi = trim($_POST['lokasi'] ?? '');
-        $kategori = trim($_POST['kategori'] ?? '');
-        $deskripsi = trim($_POST['deskripsi'] ?? '');
-        $foto = trim($_POST['foto'] ?? '');
-        $aktivitas = trim($_POST['aktivitas'] ?? '');
-        $harga = trim($_POST['harga_tiket'] ?? '');
-        $jam = trim($_POST['jam_buka'] ?? '');
-        $fasilitas = trim($_POST['fasilitas'] ?? '');
-
-        if ($nama === '' || $lokasi === '' || $kategori === '') {
-            $error = 'Nama, lokasi, dan kategori wajib diisi.';
-            $action = 'tambah';
-        } else {
-            $stmt = $conn->prepare(
-                "INSERT INTO wisata
-                (nama, lokasi, kategori, deskripsi, foto, aktivitas,
-                 harga_tiket, jam_buka, fasilitas)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            );
-
-            $stmt->bind_param(
-                'sssssssss',
-                $nama, $lokasi, $kategori, $deskripsi, $foto,
-                $aktivitas, $harga, $jam, $fasilitas
-            );
-
-            if ($stmt->execute()) {
-                $stmt->close();
-                redirect_admin('index.php?pesan=tambah');
-            }
-
-            $error = 'Gagal menambahkan wisata: ' . $stmt->error;
-            $stmt->close();
-            $action = 'tambah';
-        }
-    }
-
-    /* EDIT WISATA */
-    elseif ($aksi === 'edit') {
-        $id = (int)($_POST['id'] ?? 0);
-        $nama = trim($_POST['nama'] ?? '');
-        $lokasi = trim($_POST['lokasi'] ?? '');
-        $kategori = trim($_POST['kategori'] ?? '');
-        $deskripsi = trim($_POST['deskripsi'] ?? '');
-        $foto = trim($_POST['foto'] ?? '');
-        $aktivitas = trim($_POST['aktivitas'] ?? '');
-        $harga = trim($_POST['harga_tiket'] ?? '');
-        $jam = trim($_POST['jam_buka'] ?? '');
-        $fasilitas = trim($_POST['fasilitas'] ?? '');
-
-        if ($id < 1 || $nama === '' || $lokasi === '' || $kategori === '') {
-            $error = 'Data belum lengkap atau ID tidak valid.';
-            $action = 'edit';
-            $_GET['id'] = $id;
-        } else {
-            $stmt = $conn->prepare(
-                "UPDATE wisata SET
-                nama=?, lokasi=?, kategori=?, deskripsi=?, foto=?,
-                aktivitas=?, harga_tiket=?, jam_buka=?, fasilitas=?
-                WHERE id=?"
-            );
-
-            $stmt->bind_param(
-                'sssssssssi',
-                $nama, $lokasi, $kategori, $deskripsi, $foto,
-                $aktivitas, $harga, $jam, $fasilitas, $id
-            );
-
-            if ($stmt->execute()) {
-                $stmt->close();
-                redirect_admin('index.php?pesan=edit');
-            }
-
-            $error = 'Gagal memperbarui wisata: ' . $stmt->error;
-            $stmt->close();
-            $action = 'edit';
-            $_GET['id'] = $id;
-        }
-    }
-
-    /* HAPUS WISATA */
-    elseif ($aksi === 'hapus') {
-        $id = (int)($_POST['id'] ?? 0);
-
-        if ($id > 0) {
-            $stmt = $conn->prepare("DELETE FROM wisata WHERE id=?");
-            $stmt->bind_param('i', $id);
-
-            if ($stmt->execute()) {
-                $stmt->close();
-                redirect_admin('index.php?pesan=hapus');
-            }
-
-            $error = 'Gagal menghapus data wisata.';
-            $stmt->close();
-        } else {
-            $error = 'ID wisata tidak valid.';
-        }
-
-        $action = 'dashboard';
-    }
-
-    /* GANTI PASSWORD */
-    elseif ($aksi === 'password') {
-        $passwordLama = $_POST['password_lama'] ?? '';
-        $passwordBaru = $_POST['password_baru'] ?? '';
-        $konfirmasi = $_POST['konfirmasi_password'] ?? '';
-        $adminId = (int)$_SESSION['admin_id'];
-
-        $stmt = $conn->prepare("SELECT password FROM admin WHERE id=? LIMIT 1");
-        $stmt->bind_param('i', $adminId);
+        $stmt->bind_param("s", $username);
         $stmt->execute();
         $admin = $stmt->get_result()->fetch_assoc();
         $stmt->close();
 
-        if (!$admin || !password_verify($passwordLama, $admin['password'])) {
-            $error = 'Password lama tidak sesuai.';
-            $action = 'password';
-        } elseif (strlen($passwordBaru) < 10) {
-            $error = 'Password baru minimal 10 karakter.';
-            $action = 'password';
-        } elseif ($passwordBaru !== $konfirmasi) {
-            $error = 'Konfirmasi password tidak sama.';
-            $action = 'password';
-        } else {
-            $hash = password_hash($passwordBaru, PASSWORD_DEFAULT);
+        if ($admin && password_verify($password, $admin['password'])) {
+            session_regenerate_id(true);
+            $_SESSION['admin_id'] = (int)$admin['id'];
+            $_SESSION['admin_username'] = $admin['username'];
+            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+            header('Location: index.php');
+            exit;
+        }
 
-            $stmt = $conn->prepare("UPDATE admin SET password=? WHERE id=?");
-            $stmt->bind_param('si', $hash, $adminId);
+        go('Username atau password salah.', 'error');
+    }
 
-            if ($stmt->execute()) {
-                $stmt->close();
-                redirect_admin('index.php?pesan=password');
+    if (empty($_SESSION['admin_id'])) {
+        go('Silakan login terlebih dahulu.', 'error');
+    }
+
+    if ($action === 'logout') {
+        $_SESSION = [];
+        session_destroy();
+        header('Location: index.php');
+        exit;
+    }
+
+    if ($action === 'tambah' || $action === 'edit') {
+        $id = filter_input(INPUT_POST, 'id', FILTER_VALIDATE_INT);
+
+        if ($action === 'edit' && (!$id || !getWisata($conn, $id))) {
+            go('Data wisata tidak ditemukan.', 'error');
+        }
+
+        $nama = val('nama');
+        $lokasi = val('lokasi');
+        $kategori = val('kategori');
+        $deskripsi = val('deskripsi');
+        $foto = basename(val('foto'));
+        $aktivitas = val('aktivitas');
+        $harga = val('harga_tiket');
+        $jam = val('jam_buka');
+        $fasilitas = val('fasilitas');
+
+        if ($nama === '' || $lokasi === '' || $kategori === '' || $deskripsi === '') {
+            go('Nama, lokasi, kategori, dan deskripsi wajib diisi.', 'error');
+        }
+
+        if ($action === 'tambah') {
+            $stmt = $conn->prepare(
+                "INSERT INTO wisata
+                (nama,lokasi,kategori,deskripsi,foto,aktivitas,harga_tiket,jam_buka,fasilitas)
+                VALUES (?,?,?,?,?,?,?,?,?)"
+            );
+            $stmt->bind_param(
+                "sssssssss",
+                $nama, $lokasi, $kategori, $deskripsi, $foto,
+                $aktivitas, $harga, $jam, $fasilitas
+            );
+            $berhasil = $stmt->execute();
+            $stmt->close();
+
+            go(
+                $berhasil ? 'Wisata berhasil ditambahkan.' : 'Gagal menambahkan wisata.',
+                $berhasil ? 'success' : 'error'
+            );
+        }
+
+        $stmt = $conn->prepare(
+            "UPDATE wisata SET nama=?,lokasi=?,kategori=?,deskripsi=?,
+            foto=?,aktivitas=?,harga_tiket=?,jam_buka=?,fasilitas=? WHERE id=?"
+        );
+        $stmt->bind_param(
+            "sssssssssi",
+            $nama, $lokasi, $kategori, $deskripsi, $foto,
+            $aktivitas, $harga, $jam, $fasilitas, $id
+        );
+        $berhasil = $stmt->execute();
+        $stmt->close();
+
+        go(
+            $berhasil ? 'Data wisata berhasil diperbarui.' : 'Gagal memperbarui data wisata.',
+            $berhasil ? 'success' : 'error'
+        );
+    }
+
+    if ($action === 'hapus') {
+        $id = filter_input(INPUT_POST, 'id', FILTER_VALIDATE_INT);
+        $wisata = $id ? getWisata($conn, $id) : null;
+
+        if (!$wisata) {
+            go('Data wisata tidak ditemukan.', 'error');
+        }
+
+        $stmt = $conn->prepare("DELETE FROM wisata WHERE id=?");
+        $stmt->bind_param("i", $id);
+        $berhasil = $stmt->execute();
+        $stmt->close();
+
+        if ($berhasil) {
+            $namaFoto = basename((string)($wisata['foto'] ?? ''));
+            $pathFoto = __DIR__ . '/../images/' . $namaFoto;
+
+            if ($namaFoto !== '' && is_file($pathFoto)) {
+                @unlink($pathFoto);
             }
 
-            $error = 'Gagal mengganti password.';
-            $stmt->close();
-            $action = 'password';
+            go('Data wisata berhasil dihapus.');
         }
+
+        go('Gagal menghapus data wisata.', 'error');
+    }
+
+    if ($action === 'password') {
+        $lama = (string)($_POST['password_lama'] ?? '');
+        $baru = (string)($_POST['password_baru'] ?? '');
+        $konfirmasi = (string)($_POST['konfirmasi_password'] ?? '');
+
+        if ($lama === '' || $baru === '' || $konfirmasi === '') {
+            go('Semua kolom password wajib diisi.', 'error');
+        }
+
+        if (strlen($baru) < 10) {
+            go('Password baru minimal 10 karakter.', 'error');
+        }
+
+        if ($baru !== $konfirmasi) {
+            go('Konfirmasi password tidak cocok.', 'error');
+        }
+
+        $idAdmin = (int)$_SESSION['admin_id'];
+        $stmt = $conn->prepare("SELECT password FROM admin WHERE id=? LIMIT 1");
+        $stmt->bind_param("i", $idAdmin);
+        $stmt->execute();
+        $admin = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+
+        if (!$admin || !password_verify($lama, $admin['password'])) {
+            go('Password lama salah.', 'error');
+        }
+
+        $hash = password_hash($baru, PASSWORD_DEFAULT);
+        $stmt = $conn->prepare("UPDATE admin SET password=? WHERE id=?");
+        $stmt->bind_param("si", $hash, $idAdmin);
+        $berhasil = $stmt->execute();
+        $stmt->close();
+
+        go(
+            $berhasil ? 'Password berhasil diganti.' : 'Gagal mengganti password.',
+            $berhasil ? 'success' : 'error'
+        );
     }
 }
 
-/* =========================
-   CEK STATUS LOGIN
-========================= */
-$login = !empty($_SESSION['admin_id']);
+/* DATA HALAMAN */
+$flash = $_SESSION['flash'] ?? null;
+unset($_SESSION['flash']);
 
-if (!$login) {
-    $action = 'login';
+$isLoggedIn = !empty($_SESSION['admin_id']);
+$page = $_GET['page'] ?? 'dashboard';
+$editId = filter_input(INPUT_GET, 'edit', FILTER_VALIDATE_INT);
+$editData = null;
+
+if ($isLoggedIn && $editId) {
+    $editData = getWisata($conn, $editId);
+    $page = 'edit';
 }
 
-if (isset($_GET['pesan'])) {
-    $daftarPesan = [
-        'tambah' => 'Wisata berhasil ditambahkan.',
-        'edit' => 'Data wisata berhasil diperbarui.',
-        'hapus' => 'Data wisata berhasil dihapus.',
-        'password' => 'Password berhasil diganti.'
-    ];
-
-    $pesan = $daftarPesan[$_GET['pesan']] ?? '';
-}
-
-/* =========================
-   DATA DASHBOARD
-========================= */
 $totalWisata = 0;
 $totalKategori = 0;
 $daftarWisata = [];
-$editData = null;
+$cari = trim((string)($_GET['cari'] ?? ''));
 
-if ($login) {
-    $result = $conn->query("SELECT COUNT(*) AS total FROM wisata");
-    if ($result) {
-        $totalWisata = (int)$result->fetch_assoc()['total'];
+if ($isLoggedIn) {
+    $res = $conn->query("SELECT COUNT(*) AS total FROM wisata");
+    if ($res) {
+        $totalWisata = (int)$res->fetch_assoc()['total'];
     }
 
-    $result = $conn->query("SELECT COUNT(DISTINCT kategori) AS total FROM wisata");
-    if ($result) {
-        $totalKategori = (int)$result->fetch_assoc()['total'];
+    $res = $conn->query(
+        "SELECT COUNT(DISTINCT kategori) AS total FROM wisata WHERE kategori <> ''"
+    );
+    if ($res) {
+        $totalKategori = (int)$res->fetch_assoc()['total'];
     }
-
-    /* PENCARIAN NAMA, LOKASI, DAN KATEGORI */
-    $cari = trim($_GET['cari'] ?? '');
 
     if ($cari !== '') {
-        $kata = '%' . $cari . '%';
-
+        $keyword = '%' . $cari . '%';
         $stmt = $conn->prepare(
-            "SELECT id, nama, lokasi, kategori, harga_tiket, jam_buka
-             FROM wisata
-             WHERE nama LIKE ? OR lokasi LIKE ? OR kategori LIKE ?
-             ORDER BY id DESC"
+            "SELECT id,nama,lokasi,kategori,foto,harga_tiket,jam_buka
+            FROM wisata
+            WHERE nama LIKE ? OR lokasi LIKE ? OR kategori LIKE ?
+            ORDER BY id DESC"
         );
-        $stmt->bind_param('sss', $kata, $kata, $kata);
+        $stmt->bind_param("sss", $keyword, $keyword, $keyword);
         $stmt->execute();
         $result = $stmt->get_result();
 
@@ -287,8 +259,8 @@ if ($login) {
         $stmt->close();
     } else {
         $result = $conn->query(
-            "SELECT id, nama, lokasi, kategori, harga_tiket, jam_buka
-             FROM wisata ORDER BY id DESC"
+            "SELECT id,nama,lokasi,kategori,foto,harga_tiket,jam_buka
+            FROM wisata ORDER BY id DESC"
         );
 
         if ($result) {
@@ -297,41 +269,27 @@ if ($login) {
             }
         }
     }
-
-    if ($action === 'edit') {
-        $idEdit = (int)($_GET['id'] ?? 0);
-
-        if ($idEdit > 0) {
-            $stmt = $conn->prepare("SELECT * FROM wisata WHERE id=? LIMIT 1");
-            $stmt->bind_param('i', $idEdit);
-            $stmt->execute();
-            $editData = $stmt->get_result()->fetch_assoc();
-            $stmt->close();
-        }
-
-        if (!$editData && !$error) {
-            $error = 'Data wisata yang ingin diedit tidak ditemukan.';
-        }
-    }
 }
+
+$baseUrl = '/smkjayabuana_vokasi/';
 ?>
 <!DOCTYPE html>
 <html lang="id">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Admin Jelajah Banten</title>
 
 <style>
 :root {
-    --hijau: #217346;
-    --hijau-gelap: #165534;
-    --hijau-muda: #e9f6ed;
-    --latar: #f4f7f4;
-    --teks: #24352a;
-    --abu: #6b776e;
-    --garis: #e1e9e2;
-    --merah: #c73535;
+    --green: #176b45;
+    --dark: #104b32;
+    --pale: #e9f6ee;
+    --bg: #f4f7f5;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --red: #dc2626;
 }
 
 * {
@@ -339,15 +297,23 @@ if ($login) {
 }
 
 html {
-    -webkit-text-size-adjust: 100%;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: clip;
 }
 
 body {
     margin: 0;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: clip;
     font-family: Arial, Helvetica, sans-serif;
-    background: var(--latar);
-    color: var(--teks);
-    font-size: 14px;
+    color: var(--text);
+    background: var(--bg);
+}
+
+button, input, textarea {
+    font: inherit;
 }
 
 a {
@@ -355,355 +321,459 @@ a {
     text-decoration: none;
 }
 
-button, input, textarea, select {
-    font: inherit;
+img {
+    max-width: 100%;
 }
 
 .topbar {
-    background: #fff;
-    border-bottom: 1px solid var(--garis);
-    position: sticky;
-    top: 0;
-    z-index: 10;
+    width: 100%;
+    color: white;
+    background: linear-gradient(120deg, var(--dark), var(--green));
+    padding: 17px 24px;
 }
 
 .topbar-inner {
-    max-width: 1200px;
-    width: calc(100% - 32px);
+    width: 100%;
+    max-width: 1400px;
     margin: auto;
-    min-height: 68px;
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    gap: 16px;
+    justify-content: space-between;
+    gap: 12px;
 }
 
 .brand {
-    font-weight: 800;
-    color: var(--hijau-gelap);
-    font-size: 19px;
-    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    min-width: 0;
 }
 
-.brand small {
-    display: block;
-    font-size: 11px;
-    color: var(--abu);
-    font-weight: 500;
-    margin-top: 4px;
+.brand-icon {
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
+    display: grid;
+    place-items: center;
+    border-radius: 13px;
+    background: #ffffff24;
+    font-size: 24px;
 }
 
-.top-actions {
+.brand h1 {
+    margin: 0 0 5px;
+    font-size: 20px;
+}
+
+.brand p {
+    margin: 0;
+    font-size: 12px;
+    opacity: .85;
+}
+
+.topbar-user {
+    flex-shrink: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    text-align: right;
+    overflow-wrap: anywhere;
+}
+
+.layout {
+    width: 100%;
+    max-width: 1400px;
+    padding: 0 22px;
+    margin: 24px auto;
+    display: grid;
+    grid-template-columns: 225px minmax(0, 1fr);
+    gap: 22px;
+    align-items: start;
+}
+
+.sidebar {
+    min-width: 0;
+    position: sticky;
+    top: 15px;
+    background: white;
+    padding: 13px;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: 0 5px 22px #183b2610;
+}
+
+.sidebar-label {
+    font-size: 10px;
+    letter-spacing: 1px;
+    color: var(--muted);
+    font-weight: bold;
+    padding: 10px;
+}
+
+.sidebar nav {
+    display: grid;
+    gap: 5px;
+}
+
+.nav-link {
     display: flex;
     align-items: center;
     gap: 9px;
-}
-
-.admin-name {
-    color: var(--abu);
-    font-size: 12px;
-}
-
-.btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    border: 0;
-    border-radius: 9px;
-    padding: 10px 13px;
-    min-height: 38px;
-    font-weight: 700;
+    min-width: 0;
+    padding: 12px 10px;
+    border-radius: 10px;
     font-size: 13px;
-    cursor: pointer;
+    color: #374151;
+    overflow-wrap: anywhere;
+}
+
+.nav-link:hover,
+.nav-link.active {
+    background: var(--pale);
+    color: var(--dark);
+    font-weight: bold;
+}
+
+.nav-icon {
+    flex: 0 0 21px;
     text-align: center;
-    transition: .2s;
 }
 
-.btn-primary {
-    background: var(--hijau);
-    color: #fff;
-}
-
-.btn-primary:hover {
-    background: var(--hijau-gelap);
-}
-
-.btn-light {
-    background: var(--hijau-muda);
-    color: var(--hijau-gelap);
-}
-
-.btn-danger {
-    background: #fff0f0;
-    color: var(--merah);
-}
-
-.btn-outline {
-    background: #fff;
-    color: var(--teks);
-    border: 1px solid var(--garis);
+.nav-divider {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 12px 0;
 }
 
 .logout-form {
     margin: 0;
 }
 
-.layout {
-    max-width: 1200px;
-    width: calc(100% - 32px);
-    margin: 22px auto 40px;
+.logout-button {
+    border: 0;
+    width: 100%;
+    text-align: left;
+    background: #fff0f0;
+    color: #b91c1c;
+    cursor: pointer;
+}
+
+.main {
+    min-width: 0;
+    width: 100%;
 }
 
 .welcome {
-    margin-bottom: 18px;
+    background: linear-gradient(120deg, #e3f4e7, #f8fcf8);
+    border: 1px solid #d4ebda;
+    border-radius: 16px;
+    padding: 22px;
+    margin-bottom: 20px;
 }
 
-.welcome h1 {
-    font-size: 25px;
-    margin: 0 0 6px;
-    letter-spacing: -.5px;
+.welcome h2 {
+    margin: 0 0 8px;
+    font-size: 22px;
+    color: var(--dark);
 }
 
 .welcome p {
     margin: 0;
-    color: var(--abu);
-    line-height: 1.5;
+    line-height: 1.7;
+    color: #466052;
+    font-size: 13px;
 }
 
-.nav-menu {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 10px;
+.page-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 14px;
     margin-bottom: 20px;
 }
 
-.nav-link {
-    min-height: 48px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    padding: 10px;
-    gap: 7px;
-    border: 1px solid var(--garis);
-    border-radius: 11px;
-    background: #fff;
-    color: #46564a;
-    font-size: 13px;
-    font-weight: 700;
+.page-heading h2 {
+    margin: 0 0 7px;
+    font-size: 25px;
+    color: var(--dark);
 }
 
-.nav-link:hover,
-.nav-link.active {
-    background: var(--hijau-muda);
-    border-color: #b9ddc4;
-    color: var(--hijau-gelap);
+.page-heading p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.6;
 }
 
 .stats {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px;
+    gap: 15px;
     margin-bottom: 20px;
 }
 
 .stat-card {
-    background: #fff;
-    border: 1px solid var(--garis);
-    border-radius: 13px;
-    padding: 18px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 15px;
+    padding: 20px;
 }
 
-.stat-label {
-    color: var(--abu);
-    font-size: 13px;
+.stat-icon {
+    display: grid;
+    place-items: center;
+    width: 50px;
+    height: 50px;
+    flex: 0 0 50px;
+    border-radius: 14px;
+    background: var(--pale);
+    font-size: 24px;
 }
 
-.stat-number {
-    font-size: 28px;
-    font-weight: 800;
-    margin-top: 8px;
-    color: var(--hijau-gelap);
+.stat-card small {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 7px;
+}
+
+.stat-card strong {
+    font-size: 26px;
+    color: var(--dark);
+    overflow-wrap: anywhere;
 }
 
 .panel {
-    background: #fff;
-    border: 1px solid var(--garis);
-    border-radius: 14px;
-    padding: 20px;
-    margin-bottom: 18px;
+    width: 100%;
     min-width: 0;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 21px;
+    margin-bottom: 20px;
 }
 
-.panel-heading {
+.panel-header {
     display: flex;
-    align-items: center;
     justify-content: space-between;
+    align-items: center;
     gap: 12px;
-    margin-bottom: 17px;
+    margin-bottom: 18px;
 }
 
-.panel-heading h2 {
+.panel-header h3 {
     margin: 0;
-    font-size: 19px;
+    font-size: 17px;
 }
 
-.panel-heading p {
-    color: var(--abu);
-    margin: 5px 0 0;
+.panel-header p {
+    margin: 6px 0 0;
+    color: var(--muted);
     font-size: 12px;
+    line-height: 1.6;
 }
 
-.search-form {
-    display: flex;
-    gap: 8px;
-    width: 100%;
-    margin-bottom: 16px;
-}
-
-.search-form input {
-    min-width: 0;
-    flex: 1;
-}
-
-input, textarea, select {
-    width: 100%;
-    padding: 11px 12px;
-    border: 1px solid #dce5dd;
+.btn {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 11px 14px;
+    border: 0;
     border-radius: 9px;
-    background: #fff;
-    color: var(--teks);
-    outline: none;
+    background: var(--green);
+    color: white;
+    font-size: 12px;
+    font-weight: bold;
+    text-align: center;
+    cursor: pointer;
+    overflow-wrap: anywhere;
 }
 
-input:focus, textarea:focus, select:focus {
-    border-color: var(--hijau);
-    box-shadow: 0 0 0 3px rgba(33,115,70,.09);
+.btn:hover {
+    background: var(--dark);
+}
+
+.btn-secondary {
+    background: #edf1ee;
+    color: #374151;
+}
+
+.btn-secondary:hover {
+    background: #dfe7e1;
+}
+
+.btn-danger {
+    background: var(--red);
+}
+
+.btn-danger:hover {
+    background: #b91c1c;
+}
+
+.btn-small {
+    padding: 9px 10px;
+    font-size: 11px;
+}
+
+.alert {
+    border-radius: 10px;
+    padding: 13px 15px;
+    margin-bottom: 18px;
+    font-size: 13px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+
+.alert-success {
+    background: #e8f7ec;
+    color: #176b37;
+    border: 1px solid #b9e5c5;
+}
+
+.alert-error {
+    background: #fff0f0;
+    color: #b91c1c;
+    border: 1px solid #fecaca;
+}
+
+input, textarea {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    padding: 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 9px;
+    outline: none;
+    background: white;
+    color: var(--text);
+}
+
+input:focus, textarea:focus {
+    border-color: var(--green);
+    box-shadow: 0 0 0 3px #176b4514;
 }
 
 textarea {
-    min-height: 100px;
+    min-height: 105px;
     resize: vertical;
+    line-height: 1.6;
+}
+
+label {
+    display: block;
+    font-size: 13px;
+    font-weight: bold;
+    margin-bottom: 8px;
+}
+
+.field {
+    min-width: 0;
+    margin-bottom: 17px;
+}
+
+.help {
+    display: block;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.6;
+    margin-top: 7px;
 }
 
 .form-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px;
+    gap: 0 16px;
 }
 
-.field {
-    min-width: 0;
-}
-
-.field.full {
+.full-width {
     grid-column: 1 / -1;
-}
-
-.field label {
-    display: block;
-    font-weight: 700;
-    font-size: 13px;
-    margin-bottom: 7px;
-}
-
-.field small {
-    display: block;
-    color: var(--abu);
-    margin-top: 5px;
-    line-height: 1.4;
 }
 
 .form-actions {
     display: flex;
+    gap: 9px;
     flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 18px;
+}
+
+.search-form {
+    display: flex;
+    gap: 9px;
+    margin-bottom: 17px;
+}
+
+.search-form input {
+    flex: 1;
+    min-width: 0;
 }
 
 .table-wrap {
     width: 100%;
-    overflow-x: auto;
+    min-width: 0;
 }
 
 table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 13px;
+    table-layout: fixed;
+    font-size: 12px;
+}
+
+thead {
+    background: #f1f7f2;
 }
 
 th, td {
-    padding: 13px 10px;
+    padding: 12px 8px;
+    border-bottom: 1px solid var(--border);
     text-align: left;
-    border-bottom: 1px solid var(--garis);
-    vertical-align: middle;
+    vertical-align: top;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 th {
-    color: var(--abu);
-    background: #f8faf8;
-    font-size: 12px;
-    white-space: nowrap;
+    color: #374151;
 }
 
-td:first-child {
-    color: var(--abu);
-    width: 38px;
-}
-
-.category {
+.pill {
     display: inline-block;
+    max-width: 100%;
+    padding: 5px 8px;
     border-radius: 20px;
-    padding: 5px 9px;
-    background: var(--hijau-muda);
-    color: var(--hijau-gelap);
-    font-size: 11px;
-    font-weight: 700;
+    background: var(--pale);
+    color: var(--dark);
+    font-size: 10px;
+    font-weight: bold;
+    overflow-wrap: anywhere;
 }
 
-.row-actions {
+.table-actions {
     display: flex;
-    gap: 6px;
     flex-wrap: wrap;
+    gap: 6px;
 }
 
-.row-actions .btn {
-    padding: 7px 9px;
-    min-height: 32px;
-    font-size: 12px;
-}
-
-.inline-form {
-    display: inline;
+.table-actions form {
     margin: 0;
 }
 
-.notice {
-    padding: 12px 14px;
-    border-radius: 10px;
-    margin-bottom: 16px;
-    line-height: 1.5;
-}
-
-.notice-success {
-    color: #185b32;
-    background: #e8f7ec;
-    border: 1px solid #c5e8ce;
-}
-
-.notice-error {
-    color: #922b2b;
-    background: #fff0f0;
-    border: 1px solid #f1cccc;
-}
-
-.empty {
-    padding: 28px 15px;
+.empty-state {
     text-align: center;
-    color: var(--abu);
-    background: #fafcfa;
-    border-radius: 10px;
+    padding: 30px 12px;
+    color: var(--muted);
+    line-height: 1.7;
+}
+
+.empty-icon {
+    font-size: 35px;
+    margin-bottom: 12px;
 }
 
 .login-page {
@@ -711,311 +781,465 @@ td:first-child {
     display: grid;
     place-items: center;
     padding: 18px;
-    background: linear-gradient(135deg, #e8f5eb, #f7faf7);
+    background: linear-gradient(135deg, #edf7ef, #f8faf8);
 }
 
 .login-card {
-    background: #fff;
     width: 100%;
-    max-width: 410px;
-    padding: 27px;
-    border-radius: 17px;
-    border: 1px solid var(--garis);
-    box-shadow: 0 15px 45px rgba(30, 70, 40, .08);
+    max-width: 420px;
+    min-width: 0;
+    padding: 28px;
+    border-radius: 20px;
+    background: white;
+    border: 1px solid #e1e9e2;
+    box-shadow: 0 15px 50px #143c2814;
 }
 
-.login-card h1 {
-    color: var(--hijau-gelap);
-    margin: 0 0 7px;
+.login-brand {
+    text-align: center;
+    margin-bottom: 25px;
+}
+
+.login-brand .brand-icon {
+    margin: 0 auto 14px;
+    width: 62px;
+    height: 62px;
+    background: var(--pale);
+    font-size: 30px;
+}
+
+.login-brand h1 {
+    margin: 0 0 8px;
+    color: var(--dark);
     font-size: 24px;
 }
 
-.login-card > p {
-    margin: 0 0 22px;
-    color: var(--abu);
-    line-height: 1.5;
+.login-brand p,
+.login-footer {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.6;
 }
 
-.login-card .field {
-    margin-bottom: 15px;
+.login-brand p {
+    margin: 0;
 }
 
 .login-card .btn {
     width: 100%;
-    margin-top: 5px;
+    padding: 13px;
 }
 
-.footer {
+.login-footer {
     text-align: center;
-    color: var(--abu);
-    font-size: 12px;
-    padding: 10px 0 0;
+    margin-top: 18px;
 }
 
-/* RESPONSIF TABLET */
-@media (max-width: 800px) {
-    .topbar-inner {
-        width: calc(100% - 24px);
-    }
-
+/* TABLET */
+@media (max-width: 1000px) {
     .layout {
-        width: calc(100% - 24px);
-        margin-top: 17px;
+        grid-template-columns: 190px minmax(0, 1fr);
+        gap: 14px;
+        padding: 0 14px;
     }
 
-    .nav-menu {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 8px;
+    .sidebar {
+        padding: 9px;
     }
 
     .panel {
         padding: 16px;
     }
 
-    .welcome h1 {
-        font-size: 22px;
+    th, td {
+        padding: 10px 6px;
+        font-size: 11px;
     }
 }
 
-/* RESPONSIF HP */
-@media (max-width: 600px) {
-    body {
-        font-size: 13px;
+/* HP: SEMUA KONTEN MENYESUAIKAN LEBAR LAYAR */
+@media (max-width: 760px) {
+    .topbar {
+        padding: 13px 12px;
     }
 
     .topbar-inner {
-        width: calc(100% - 20px);
-        min-height: 58px;
         gap: 8px;
     }
 
     .brand {
+        gap: 8px;
+    }
+
+    .brand-icon {
+        width: 36px;
+        height: 36px;
+        flex-basis: 36px;
+        border-radius: 10px;
+        font-size: 19px;
+    }
+
+    .brand h1 {
         font-size: 15px;
     }
 
-    .brand small {
+    .brand p {
         font-size: 10px;
-        margin-top: 2px;
     }
 
-    .top-actions {
-        gap: 6px;
-    }
-
-    .admin-name {
-        display: none;
-    }
-
-    .top-actions .btn {
-        min-height: 33px;
-        padding: 7px 9px;
-        font-size: 11px;
+    .topbar-user {
+        max-width: 105px;
+        font-size: 10px;
     }
 
     .layout {
-        width: calc(100% - 20px);
-        margin: 15px auto 25px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        width: 100%;
+        max-width: 100%;
+        margin: 12px 0;
+        padding: 0 10px;
+    }
+
+    .sidebar {
+        position: static;
+        width: 100%;
+        padding: 8px;
+        margin: 0;
+        border-radius: 12px;
+    }
+
+    .sidebar-label,
+    .nav-divider {
+        display: none;
+    }
+
+    .sidebar nav {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+    }
+
+    .nav-link {
+        justify-content: flex-start;
+        min-width: 0;
+        min-height: 40px;
+        padding: 9px 7px;
+        margin: 0;
+        gap: 5px;
+        font-size: 11px;
+    }
+
+    .nav-icon {
+        flex-basis: 17px;
+        font-size: 13px;
+    }
+
+    .logout-form {
+        margin-top: 6px;
+    }
+
+    .logout-button {
+        justify-content: center;
+    }
+
+    .main {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
     }
 
     .welcome {
-        margin-bottom: 13px;
+        padding: 15px;
+        margin-bottom: 14px;
+        border-radius: 12px;
     }
 
-    .welcome h1 {
-        font-size: 20px;
+    .welcome h2 {
+        font-size: 18px;
+        line-height: 1.4;
     }
 
     .welcome p {
         font-size: 12px;
     }
 
-    .nav-menu {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 7px;
+    .page-heading {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
         margin-bottom: 14px;
     }
 
-    .nav-link {
-        min-height: 42px;
-        padding: 8px 5px;
-        border-radius: 9px;
-        font-size: 11px;
-        gap: 4px;
+    .page-heading h2 {
+        font-size: 21px;
+    }
+
+    .page-heading p {
+        font-size: 12px;
+    }
+
+    .page-heading > .btn {
+        width: 100%;
     }
 
     .stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 8px;
         margin-bottom: 14px;
     }
 
     .stat-card {
-        padding: 12px;
-        border-radius: 11px;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 12px 10px;
+        border-radius: 12px;
     }
 
-    .stat-label {
-        font-size: 11px;
-        line-height: 1.4;
+    .stat-icon {
+        width: 34px;
+        height: 34px;
+        flex-basis: 34px;
+        border-radius: 9px;
+        font-size: 17px;
     }
 
-    .stat-number {
-        font-size: 23px;
-        margin-top: 5px;
+    .stat-card small {
+        font-size: 10px;
+        line-height: 1.5;
+    }
+
+    .stat-card strong {
+        font-size: 22px;
     }
 
     .panel {
-        padding: 13px;
-        border-radius: 11px;
-        margin-bottom: 13px;
+        width: 100%;
+        min-width: 0;
+        padding: 13px 10px;
+        margin-bottom: 14px;
+        border-radius: 12px;
     }
 
-    .panel-heading {
-        margin-bottom: 13px;
-        align-items: flex-start;
+    .panel-header {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+        margin-bottom: 14px;
     }
 
-    .panel-heading h2 {
-        font-size: 16px;
-    }
-
-    .panel-heading p {
-        font-size: 11px;
-    }
-
-    .btn {
-        font-size: 12px;
-        min-height: 36px;
-        padding: 9px 10px;
-    }
-
-    .search-form {
-        gap: 6px;
-        margin-bottom: 12px;
-    }
-
-    .search-form input {
-        padding: 10px;
-        font-size: 12px;
-    }
-
-    .search-form .btn {
-        padding: 8px 10px;
-        white-space: nowrap;
+    .panel-header .btn {
+        width: 100%;
     }
 
     .form-grid {
-        grid-template-columns: 1fr;
-        gap: 12px;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
     }
 
-    .field.full {
+    .full-width {
         grid-column: auto;
     }
 
-    input, textarea, select {
-        padding: 10px;
-        font-size: 13px;
-    }
-
-    /* Tabel menjadi kartu di HP */
-    .table-wrap {
-        overflow: visible;
-    }
-
-    table, tbody {
-        display: block;
-        width: 100%;
-    }
-
-    thead {
-        display: none;
-    }
-
-    tbody tr {
-        display: block;
-        border: 1px solid var(--garis);
-        border-radius: 10px;
-        padding: 10px;
-        margin-bottom: 10px;
-        background: #fff;
-    }
-
-    tbody td {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 10px;
-        width: 100%;
-        padding: 7px 0;
-        border-bottom: 1px solid #edf1ed;
-        font-size: 12px;
-        text-align: right;
-        overflow-wrap: anywhere;
-    }
-
-    tbody td:last-child {
-        border-bottom: 0;
-        padding-top: 10px;
-    }
-
-    tbody td::before {
-        content: attr(data-label);
-        flex: 0 0 88px;
-        text-align: left;
-        color: var(--abu);
-        font-weight: 700;
-        font-size: 11px;
-    }
-
-    tbody td:first-child {
-        width: 100%;
-    }
-
-    .row-actions {
-        justify-content: flex-end;
-    }
-
-    .row-actions .btn {
-        min-height: 30px;
-        font-size: 11px;
-        padding: 6px 8px;
+    input, textarea {
+        font-size: 16px;
     }
 
     .form-actions {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 8px;
     }
 
     .form-actions .btn {
         width: 100%;
+        min-height: 42px;
+    }
+
+    .search-form {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 8px;
+    }
+
+    .search-form > * {
+        width: 100%;
+        min-width: 0;
+    }
+
+    /* TABEL DIUBAH MENJADI KARTU, BUKAN DIGESER */
+    .table-wrap {
+        width: 100%;
+        max-width: 100%;
+        overflow: visible;
+    }
+
+    .table-wrap table {
+        display: block;
+        width: 100%;
+        min-width: 0;
+        table-layout: fixed;
+        border: 0;
+    }
+
+    .table-wrap thead {
+        display: none;
+    }
+
+    .table-wrap tbody {
+        display: block;
+        width: 100%;
+    }
+
+    .table-wrap tbody tr {
+        display: block;
+        width: 100%;
+        min-width: 0;
+        margin: 0 0 12px;
+        padding: 10px;
+        border: 1px solid #e1e9e3;
+        border-radius: 12px;
+        background: #fff;
+        box-shadow: 0 3px 12px #143c280c;
+    }
+
+    .table-wrap tbody td {
+        display: grid;
+        grid-template-columns: minmax(75px, 31%) minmax(0, 1fr);
+        align-items: start;
+        gap: 8px;
+        width: 100%;
+        min-width: 0;
+        padding: 9px 0;
+        border-bottom: 1px solid #edf0ed;
+        font-size: 12px;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+    }
+
+    .table-wrap tbody td::before {
+        font-weight: bold;
+        color: #65736a;
+        overflow-wrap: anywhere;
+    }
+
+    .table-wrap tbody td:nth-child(1)::before {
+        content: "Nomor";
+    }
+
+    .table-wrap tbody td:nth-child(2)::before {
+        content: "Nama wisata";
+    }
+
+    .table-wrap tbody td:nth-child(3)::before {
+        content: "Lokasi";
+    }
+
+    .table-wrap tbody td:nth-child(4)::before {
+        content: "Kategori";
+    }
+
+    .table-wrap tbody td:nth-child(5)::before {
+        content: "Harga tiket";
+    }
+
+    .table-wrap tbody td:nth-child(6)::before {
+        content: "Jam buka";
+    }
+
+    .table-wrap tbody td:nth-child(7)::before {
+        content: "Aksi";
+    }
+
+    .table-wrap tbody td:last-child {
+        border-bottom: 0;
+        padding-top: 11px;
+    }
+
+    .table-actions {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 7px;
+        width: 100%;
+    }
+
+    .table-actions form,
+    .table-actions .btn {
+        width: 100%;
+        min-width: 0;
+    }
+
+    .table-actions .btn {
+        min-height: 38px;
+    }
+
+    .alert {
+        padding: 11px;
+        font-size: 12px;
+    }
+
+    .login-page {
+        padding: 14px;
     }
 
     .login-card {
-        padding: 21px;
-        border-radius: 14px;
-    }
-
-    .login-card h1 {
-        font-size: 21px;
+        padding: 23px 17px;
     }
 }
 
-@media (max-width: 350px) {
-    .brand {
+/* HP KECIL */
+@media (max-width: 380px) {
+    .topbar {
+        padding: 12px 9px;
+    }
+
+    .brand h1 {
         font-size: 13px;
     }
 
-    .top-actions .btn {
-        font-size: 10px;
-        padding: 6px 7px;
+    .brand p {
+        font-size: 9px;
+    }
+
+    .topbar-user {
+        max-width: 82px;
+        font-size: 9px;
+    }
+
+    .layout {
+        padding: 0 7px;
+    }
+
+    .panel {
+        padding: 11px 8px;
     }
 
     .nav-link {
         font-size: 10px;
+        padding: 8px 5px;
     }
 
-    tbody td::before {
-        flex-basis: 74px;
+    .table-wrap tbody tr {
+        padding: 8px;
+    }
+
+    .table-wrap tbody td {
+        grid-template-columns: minmax(65px, 31%) minmax(0, 1fr);
+        gap: 6px;
+        font-size: 11px;
+    }
+
+    .stat-card {
+        padding: 10px 8px;
+    }
+
+    .stat-card strong {
+        font-size: 20px;
     }
 }
 </style>
@@ -1023,38 +1247,43 @@ td:first-child {
 
 <body>
 
-<?php if (!$login): ?>
+<?php if (!$isLoggedIn): ?>
 
 <div class="login-page">
     <div class="login-card">
-        <h1>🌿 Jelajah Banten</h1>
-        <p>Login administrator untuk mengelola data wisata.</p>
+        <div class="login-brand">
+            <div class="brand-icon">🌿</div>
+            <h1>Jelajah Banten</h1>
+            <p>Panel Admin Pengelolaan Wisata</p>
+        </div>
 
-        <?php if ($error): ?>
-            <div class="notice notice-error"><?= e($error) ?></div>
+        <?php if ($flash): ?>
+            <div class="alert <?= $flash['type'] === 'success' ? 'alert-success' : 'alert-error' ?>">
+                <?= e($flash['message']) ?>
+            </div>
         <?php endif; ?>
 
-        <form method="post" action="index.php?action=login">
+        <form method="POST">
             <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
             <input type="hidden" name="action" value="login">
 
             <div class="field">
-                <label for="username">Username</label>
-                <input id="username" type="text" name="username"
-                       placeholder="Masukkan username" required autocomplete="username">
+                <label for="username">Username Admin</label>
+                <input id="username" name="username" type="text"
+                    autocomplete="username" placeholder="Masukkan username" required>
             </div>
 
             <div class="field">
                 <label for="password">Password</label>
-                <input id="password" type="password" name="password"
-                       placeholder="Masukkan password" required autocomplete="current-password">
+                <input id="password" name="password" type="password"
+                    autocomplete="current-password" placeholder="Masukkan password" required>
             </div>
 
-            <button type="submit" class="btn btn-primary">Masuk ke Dashboard</button>
+            <button class="btn" type="submit">🔐 Login Admin</button>
         </form>
 
-        <div class="footer" style="margin-top:18px">
-            Admin Panel · Jelajah Banten
+        <div class="login-footer">
+            Kelola informasi destinasi wisata Banten dengan mudah.
         </div>
     </div>
 </div>
@@ -1063,399 +1292,421 @@ td:first-child {
 
 <header class="topbar">
     <div class="topbar-inner">
-        <a class="brand" href="index.php">
-            🌿 Jelajah Banten
-            <small>Panel Administrator</small>
-        </a>
-
-        <div class="top-actions">
-            <span class="admin-name">
-                👤 <?= e($_SESSION['admin_username'] ?? 'Admin') ?>
-            </span>
-
-            <form method="post" class="logout-form"
-                  onsubmit="return confirm('Yakin ingin keluar dari admin?')">
-                <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
-                <input type="hidden" name="action" value="logout">
-                <button type="submit" class="btn btn-outline">Keluar</button>
-            </form>
+        <div class="brand">
+            <div class="brand-icon">🌿</div>
+            <div>
+                <h1>Jelajah Banten</h1>
+                <p>Panel Administrasi Wisata</p>
+            </div>
         </div>
+
+       <div class="topbar-user">
+    <span style="font-size:13px; color:#ffffff !important; font-weight:700; opacity:1 !important; -webkit-text-fill-color:#ffffff;">
+        ADMIN DASHBOARD
+    </span>
+</div>
+
     </div>
 </header>
 
-<main class="layout">
+<div class="layout">
 
-    <div class="welcome">
-        <h1>Dashboard Admin</h1>
-        <p>Kelola informasi destinasi wisata Jelajah Banten dengan mudah.</p>
-    </div>
+    <aside class="sidebar">
+        <div class="sidebar-label">MENU UTAMA</div>
 
-    <nav class="nav-menu">
-        <a class="nav-link <?= $action === 'dashboard' ? 'active' : '' ?>"
-           href="index.php">🏠 Dashboard</a>
+        <nav>
+            <a class="nav-link <?= $page === 'dashboard' ? 'active' : '' ?>" href="index.php">
+                <span class="nav-icon">📊</span> Dashboard
+            </a>
 
-        <a class="nav-link <?= $action === 'tambah' ? 'active' : '' ?>"
-           href="index.php?action=tambah">➕ Tambah Wisata</a>
+            <a class="nav-link <?= $page === 'tambah' ? 'active' : '' ?>" href="index.php?page=tambah">
+                <span class="nav-icon">➕</span> Tambah Wisata
+            </a>
 
-        <a class="nav-link <?= $action === 'password' ? 'active' : '' ?>"
-           href="index.php?action=password">🔐 Ganti Password</a>
+            <a class="nav-link <?= $page === 'password' ? 'active' : '' ?>" href="index.php?page=password">
+                <span class="nav-icon">🔑</span> Ganti Password
+            </a>
 
-        <a class="nav-link" href="../index.php" target="_blank" rel="noopener">
-            🌐 Lihat Web
-        </a>
-    </nav>
+            <a class="nav-link" href="<?= e($baseUrl) ?>" target="_blank" rel="noopener">
+                <span class="nav-icon">🌐</span> Lihat Website
+            </a>
+        </nav>
 
-    <?php if ($pesan): ?>
-        <div class="notice notice-success"><?= e($pesan) ?></div>
-    <?php endif; ?>
+        <hr class="nav-divider">
 
-    <?php if ($error): ?>
-        <div class="notice notice-error"><?= e($error) ?></div>
-    <?php endif; ?>
+        <form class="logout-form" method="POST"
+            onsubmit="return confirm('Yakin ingin logout?')">
+            <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
+            <input type="hidden" name="action" value="logout">
 
-    <?php if ($action === 'dashboard'): ?>
+            <button type="submit" class="nav-link logout-button">
+                <span class="nav-icon">🚪</span> Logout
+            </button>
+        </form>
+    </aside>
 
-        <section class="stats">
-            <div class="stat-card">
-                <div class="stat-label">Total Destinasi Wisata</div>
-                <div class="stat-number"><?= $totalWisata ?></div>
+    <main class="main">
+
+        <?php if ($flash): ?>
+            <div class="alert <?= $flash['type'] === 'success' ? 'alert-success' : 'alert-error' ?>">
+                <?= e($flash['message']) ?>
             </div>
+        <?php endif; ?>
 
-            <div class="stat-card">
-                <div class="stat-label">Total Kategori</div>
-                <div class="stat-number"><?= $totalKategori ?></div>
-            </div>
-        </section>
+        <?php if ($page === 'tambah' || $page === 'edit'): ?>
 
-        <section class="panel">
-            <div class="panel-heading">
+            <?php
+            $isEdit = ($page === 'edit' && $editData);
+            $dataForm = $isEdit ? $editData : [
+                'id' => '',
+                'nama' => '',
+                'lokasi' => '',
+                'kategori' => '',
+                'deskripsi' => '',
+                'foto' => '',
+                'aktivitas' => '',
+                'harga_tiket' => '',
+                'jam_buka' => '',
+                'fasilitas' => ''
+            ];
+
+            // Membaca jam yang tersimpan agar pilihan tetap sesuai saat mengedit.
+            $jamTersimpan = trim((string)($dataForm['jam_buka'] ?? ''));
+            $jam24 = preg_match('/24\s*jam/i', $jamTersimpan) === 1;
+            $jamMulai = '08:00';
+            $jamSelesai = '17:00';
+
+            if (preg_match('/(\d{1,2})[:.](\d{2}).*?(\d{1,2})[:.](\d{2})/', $jamTersimpan, $hasilJam)) {
+                $jamMulai = sprintf('%02d:%02d', (int)$hasilJam[1], (int)$hasilJam[2]);
+                $jamSelesai = sprintf('%02d:%02d', (int)$hasilJam[3], (int)$hasilJam[4]);
+            }
+            ?>
+
+            <div class="page-heading">
                 <div>
-                    <h2>Data Wisata</h2>
-                    <p>Cari berdasarkan nama, lokasi, atau kategori.</p>
+                    <h2><?= $isEdit ? '✏️ Edit Wisata' : '➕ Tambah Wisata' ?></h2>
+                    <p>Kelola informasi destinasi wisata.</p>
                 </div>
+                <a href="index.php" class="btn btn-secondary">← Kembali</a>
             </div>
 
-            <form method="get" action="index.php" class="search-form">
-                <input type="search" name="cari"
-                       placeholder="🔎 Cari wisata atau lokasi..."
-                       value="<?= e($_GET['cari'] ?? '') ?>"
-                       aria-label="Cari wisata">
-                <button type="submit" class="btn btn-primary">Cari</button>
-
-                <?php if (!empty($_GET['cari'])): ?>
-                    <a href="index.php" class="btn btn-light">Reset</a>
-                <?php endif; ?>
-            </form>
-
-            <p style="font-size:12px;color:#6b776e;margin:0 0 12px">
-                Ditemukan <?= count($daftarWisata) ?> data wisata.
-            </p>
-
-            <?php if (count($daftarWisata) > 0): ?>
-                <div class="table-wrap">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>Nama Wisata</th>
-                                <th>Lokasi</th>
-                                <th>Kategori</th>
-                                <th>Harga Tiket</th>
-                                <th>Jam Buka</th>
-                                <th>Aksi</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                        <?php foreach ($daftarWisata as $w): ?>
-                            <tr>
-                                <td data-label="ID"><?= (int)$w['id'] ?></td>
-                                <td data-label="Nama Wisata">
-                                    <strong><?= e($w['nama']) ?></strong>
-                                </td>
-                                <td data-label="Lokasi"><?= e($w['lokasi']) ?></td>
-                                <td data-label="Kategori">
-                                    <span class="category"><?= e($w['kategori']) ?></span>
-                                </td>
-                                <td data-label="Harga Tiket">
-                                    <?= e($w['harga_tiket'] ?: 'Belum diisi') ?>
-                                </td>
-                                <td data-label="Jam Buka">
-                                    <?= e($w['jam_buka'] ?: 'Belum diisi') ?>
-                                </td>
-                                <td data-label="Aksi">
-                                    <div class="row-actions">
-                                        <a class="btn btn-light"
-                                           href="index.php?action=edit&id=<?= (int)$w['id'] ?>">
-                                            Edit
-                                        </a>
-
-                                        <form method="post" class="inline-form"
-                                              onsubmit="return confirm('Yakin ingin menghapus wisata ini?')">
-                                            <input type="hidden" name="csrf_token"
-                                                   value="<?= e($_SESSION['csrf_token']) ?>">
-                                            <input type="hidden" name="action" value="hapus">
-                                            <input type="hidden" name="id"
-                                                   value="<?= (int)$w['id'] ?>">
-                                            <button type="submit" class="btn btn-danger">
-                                                Hapus
-                                            </button>
-                                        </form>
-                                    </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                        </tbody>
-                    </table>
+            <section class="panel">
+                <div class="panel-header">
+                    <div>
+                        <h3>Informasi Destinasi</h3>
+                        <p>Lengkapi data wisata dengan informasi yang benar.</p>
+                    </div>
                 </div>
-            <?php else: ?>
-                <div class="empty">
-                    <p>Data wisata tidak ditemukan.</p>
-                    <?php if (!empty($_GET['cari'])): ?>
-                        <a class="btn btn-light" href="index.php">Tampilkan Semua Wisata</a>
-                    <?php else: ?>
-                        <a class="btn btn-primary" href="index.php?action=tambah">
-                            Tambah Wisata Pertama
-                        </a>
+
+                <?php if ($page === 'edit' && !$editData): ?>
+                    <div class="alert alert-error">
+                        Data wisata tidak ditemukan. Silakan kembali ke dashboard.
+                    </div>
+                <?php else: ?>
+
+                <form method="POST">
+                    <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
+                    <input type="hidden" name="action" value="<?= $isEdit ? 'edit' : 'tambah' ?>">
+
+                    <?php if ($isEdit): ?>
+                        <input type="hidden" name="id" value="<?= (int)$dataForm['id'] ?>">
                     <?php endif; ?>
-                </div>
-            <?php endif; ?>
-        </section>
 
-    <?php elseif ($action === 'tambah' || $action === 'edit'): ?>
+                    <div class="form-grid">
+                        <div class="field">
+                            <label for="nama">Nama Wisata *</label>
+                            <input id="nama" name="nama"
+                                value="<?= e($dataForm['nama']) ?>"
+                                placeholder="Contoh: Pantai Anyer" required>
+                        </div>
 
-        <?php
-        $isEdit = ($action === 'edit');
-        $d = $editData ?: [];
-        ?>
+                        <div class="field">
+                            <label for="lokasi">Lokasi *</label>
+                            <input id="lokasi" name="lokasi"
+                                value="<?= e($dataForm['lokasi']) ?>"
+                                placeholder="Serang, Banten" required>
+                        </div>
 
-        <section class="panel">
-            <div class="panel-heading">
-                <div>
-                    <h2><?= $isEdit ? 'Edit Data Wisata' : 'Tambah Wisata Baru' ?></h2>
-                    <p>Isi informasi destinasi wisata di bawah ini.</p>
-                </div>
-            </div>
+                        <div class="field">
+                            <label for="kategori">Kategori *</label>
+                            <input id="kategori" name="kategori"
+                                value="<?= e($dataForm['kategori']) ?>"
+                                placeholder="Pantai, Pulau, Sejarah" required>
+                        </div>
 
-            <?php if ($isEdit && !$editData): ?>
-                <div class="empty">
-                    Data wisata tidak ditemukan.
-                    <p><a class="btn btn-light" href="index.php">Kembali ke Dashboard</a></p>
-                </div>
-            <?php else: ?>
+                        <div class="field">
+                            <label for="foto">Nama File Foto</label>
+                            <input id="foto" name="foto"
+                                value="<?= e($dataForm['foto']) ?>"
+                                placeholder="pantai_anyer.webp">
+                            <span class="help">Simpan foto di folder images dan isi nama filenya saja.</span>
+                        </div>
 
-            <form method="post" action="index.php?action=<?= $isEdit ? 'edit&id=' . (int)$d['id'] : 'tambah' ?>">
-                <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
-                <input type="hidden" name="action" value="<?= $isEdit ? 'edit' : 'tambah' ?>">
+                        <div class="field">
+                            <label for="harga_tiket">Harga Tiket</label>
+                            <input id="harga_tiket" name="harga_tiket"
+                                value="<?= e($dataForm['harga_tiket']) ?>"
+                                placeholder="Rp 10.000 per orang">
+                        </div>
 
-                <?php if ($isEdit): ?>
-                    <input type="hidden" name="id" value="<?= (int)$d['id'] ?>">
+                        <div class="field">
+                            <label for="jenis_jam">Jam Operasional</label>
+
+                            <select id="jenis_jam" style="display:block;width:100%;padding:12px;border:1px solid #d1d5db;border-radius:9px;background:white;margin-bottom:12px;color:var(--text);font-size:13px;">
+                                <option value="normal" <?= !$jam24 ? 'selected' : '' ?>>Pilih Jam Buka dan Tutup</option>
+                                <option value="24" <?= $jam24 ? 'selected' : '' ?>>Buka 24 Jam</option>
+                            </select>
+
+                            <div id="pilihan_jam" style="<?= $jam24 ? 'display:none;' : '' ?>">
+                                <label for="jam_mulai">Jam Buka</label>
+                                <input type="time" id="jam_mulai" value="<?= e($jamMulai) ?>">
+
+                                <label for="jam_selesai" style="margin-top:12px">Jam Tutup</label>
+                                <input type="time" id="jam_selesai" value="<?= e($jamSelesai) ?>">
+                            </div>
+
+                            <input type="hidden" id="jam_buka" name="jam_buka" value="<?= e($jamTersimpan) ?>">
+                            <span class="help">Pilih jam buka dan tutup menggunakan pemilih waktu, atau pilih Buka 24 Jam.</span>
+                        </div>
+
+                        <div class="field full-width">
+                            <label for="deskripsi">Deskripsi Wisata *</label>
+                            <textarea id="deskripsi" name="deskripsi"
+                                placeholder="Deskripsi destinasi wisata..." required><?= e($dataForm['deskripsi']) ?></textarea>
+                        </div>
+
+                        <div class="field full-width">
+                            <label for="aktivitas">Aktivitas Wisata</label>
+                            <textarea id="aktivitas" name="aktivitas"
+                                placeholder="Aktivitas yang bisa dilakukan pengunjung..."><?= e($dataForm['aktivitas']) ?></textarea>
+                        </div>
+
+                        <div class="field full-width">
+                            <label for="fasilitas">Fasilitas</label>
+                            <textarea id="fasilitas" name="fasilitas"
+                                placeholder="Area parkir, toilet, musala, dan lainnya..."><?= e($dataForm['fasilitas']) ?></textarea>
+                        </div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button class="btn" type="submit">
+                            <?= $isEdit ? '💾 Simpan Perubahan' : '➕ Simpan Wisata' ?>
+                        </button>
+                        <a class="btn btn-secondary" href="index.php">Batal</a>
+                    </div>
+                </form>
+
                 <?php endif; ?>
+            </section>
 
-                <div class="form-grid">
-                    <div class="field">
-                        <label for="nama">Nama Wisata *</label>
-                        <input id="nama" name="nama" required
-                               value="<?= e($d['nama'] ?? '') ?>"
-                               placeholder="Contoh: Pantai Anyer">
-                    </div>
+        <?php elseif ($page === 'password'): ?>
 
-                    <div class="field">
-                        <label for="lokasi">Lokasi *</label>
-                        <input id="lokasi" name="lokasi" required
-                               value="<?= e($d['lokasi'] ?? '') ?>"
-                               placeholder="Contoh: Serang, Banten">
-                    </div>
-
-                    
-<div class="field">
-    <label for="kategori">Kategori *</label>
-    <input
-        type="text"
-        id="kategori"
-        name="kategori"
-        value="<?= e($d['kategori'] ?? '') ?>"
-        placeholder="Contoh: Pantai, Pulau, Sejarah, Kuliner"
-        maxlength="100"
-        required
-    >
-    <small>Ketik sendiri kategori wisata sesuai keinginanmu.</small>
-</div>
-
-
-                    <div class="field">
-                        <label for="foto">Nama File Foto</label>
-                        <input id="foto" name="foto"
-                               value="<?= e($d['foto'] ?? '') ?>"
-                               placeholder="Contoh: pantai_anyer.webp">
-                        <small>Masukkan nama file gambar yang tersedia di folder images.</small>
-                    </div>
-
-                    <div class="field">
-                        <label for="harga_tiket">Harga Tiket</label>
-                        <input id="harga_tiket" name="harga_tiket"
-                               value="<?= e($d['harga_tiket'] ?? '') ?>"
-                               placeholder="Contoh: Mulai Rp20.000">
-                    </div>
-
-                    
-<div class="field">
-    <label for="jenis_jam">Jam Operasional</label>
-
-    <select id="jenis_jam" onchange="aturJam()">
-        <option value="atur">Atur Jam Sendiri</option>
-        <option value="24">Buka 24 Jam</option>
-    </select>
-
-    <div id="pilihan_waktu" style="display:flex; gap:10px; align-items:center; margin-top:10px;">
-        <input type="time" id="jam_mulai" style="flex:1;">
-        <span>sampai</span>
-        <input type="time" id="jam_selesai" style="flex:1;">
-    </div>
-
-    <input
-        type="hidden"
-        id="jam_buka"
-        name="jam_buka"
-        value="<?= e($d['jam_buka'] ?? '') ?>"
-    >
-
-    <small>Pilih buka 24 jam atau tentukan sendiri jam operasionalnya.</small>
-</div>
-
-<script>
-function aturJam() {
-    const jenis = document.getElementById('jenis_jam').value;
-    const pilihan = document.getElementById('pilihan_waktu');
-    const mulai = document.getElementById('jam_mulai');
-    const selesai = document.getElementById('jam_selesai');
-    const hasil = document.getElementById('jam_buka');
-
-    if (jenis === '24') {
-        pilihan.style.display = 'none';
-        hasil.value = '24 Jam';
-    } else {
-        pilihan.style.display = 'flex';
-        perbaruiJam();
-    }
-}
-
-function perbaruiJam() {
-    const mulai = document.getElementById('jam_mulai').value;
-    const selesai = document.getElementById('jam_selesai').value;
-    const hasil = document.getElementById('jam_buka');
-
-    if (mulai && selesai) {
-        hasil.value = mulai + ' - ' + selesai + ' WIB';
-    } else {
-        hasil.value = '';
-    }
-}
-
-document.getElementById('jam_mulai').addEventListener('input', perbaruiJam);
-document.getElementById('jam_selesai').addEventListener('input', perbaruiJam);
-
-(function () {
-    const hasil = document.getElementById('jam_buka');
-    const mulai = document.getElementById('jam_mulai');
-    const selesai = document.getElementById('jam_selesai');
-    const jenis = document.getElementById('jenis_jam');
-
-    if (hasil.value.trim().toLowerCase() === '24 jam') {
-        jenis.value = '24';
-    } else {
-        const nilaiLama = hasil.value.match(/(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})/);
-
-        if (nilaiLama) {
-            mulai.value = nilaiLama[1];
-            selesai.value = nilaiLama[2];
-        }
-    }
-
-    aturJam();
-})();
-</script>
-
-
-                    <div class="field full">
-                        <label for="deskripsi">Deskripsi Wisata</label>
-                        <textarea id="deskripsi" name="deskripsi"
-                                  placeholder="Jelaskan daya tarik wisata..."><?= e($d['deskripsi'] ?? '') ?></textarea>
-                    </div>
-
-                    <div class="field full">
-                        <label for="aktivitas">Aktivitas</label>
-                        <textarea id="aktivitas" name="aktivitas"
-                                  placeholder="Contoh: berenang, berfoto, menikmati pemandangan"><?= e($d['aktivitas'] ?? '') ?></textarea>
-                    </div>
-
-                    <div class="field full">
-                        <label for="fasilitas">Fasilitas</label>
-                        <textarea id="fasilitas" name="fasilitas"
-                                  placeholder="Contoh: area parkir, toilet, tempat makan"><?= e($d['fasilitas'] ?? '') ?></textarea>
-                    </div>
-                </div>
-
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-primary">
-                        <?= $isEdit ? 'Simpan Perubahan' : 'Simpan Wisata' ?>
-                    </button>
-                    <a href="index.php" class="btn btn-outline">Batal</a>
-                </div>
-            </form>
-
-            <?php endif; ?>
-        </section>
-
-    <?php elseif ($action === 'password'): ?>
-
-        <section class="panel">
-            <div class="panel-heading">
+            <div class="page-heading">
                 <div>
-                    <h2>Ganti Password Admin</h2>
-                    <p>Gunakan password baru yang kuat dan mudah kamu ingat.</p>
+                    <h2>🔑 Ganti Password</h2>
+                    <p>Ubah password untuk menjaga keamanan akun admin.</p>
                 </div>
             </div>
 
-            <form method="post" action="index.php?action=password">
-                <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
-                <input type="hidden" name="action" value="password">
+            <section class="panel">
+                <div class="panel-header">
+                    <div>
+                        <h3>Keamanan Akun</h3>
+                        <p>Password baru harus minimal 10 karakter.</p>
+                    </div>
+                </div>
 
-                <div class="form-grid">
-                    <div class="field full">
+                <form method="POST" autocomplete="off">
+                    <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
+                    <input type="hidden" name="action" value="password">
+
+                    <div class="field">
                         <label for="password_lama">Password Lama</label>
-                        <input id="password_lama" type="password" name="password_lama"
-                               required autocomplete="current-password">
+                        <input type="password" id="password_lama" name="password_lama"
+                            autocomplete="current-password" required>
                     </div>
 
                     <div class="field">
                         <label for="password_baru">Password Baru</label>
-                        <input id="password_baru" type="password" name="password_baru"
-                               minlength="10" required autocomplete="new-password">
-                        <small>Minimal 10 karakter.</small>
+                        <input type="password" id="password_baru" name="password_baru"
+                            minlength="10" autocomplete="new-password" required>
                     </div>
 
                     <div class="field">
                         <label for="konfirmasi_password">Konfirmasi Password Baru</label>
-                        <input id="konfirmasi_password" type="password"
-                               name="konfirmasi_password" minlength="10"
-                               required autocomplete="new-password">
+                        <input type="password" id="konfirmasi_password" name="konfirmasi_password"
+                            minlength="10" autocomplete="new-password" required>
+                    </div>
+
+                    <div class="form-actions">
+                        <button class="btn" type="submit">🔐 Simpan Password Baru</button>
+                    </div>
+                </form>
+            </section>
+
+        <?php else: ?>
+
+            <div class="welcome">
+                <h2>Halo, y4kang👋 Ey Santay Tipis Tipis</h2>
+                <p>Selamat datang di dashboard Jelajah Banten. Kelola destinasi wisata melalui panel admin ini.</p>
+            </div>
+
+            <div class="page-heading">
+                <div>
+                    <h2>Dashboard</h2>
+                    <p>Ringkasan data destinasi wisata.</p>
+                </div>
+            </div>
+
+            <div class="stats">
+                <div class="stat-card">
+                    <div class="stat-icon">🏝️</div>
+                    <div>
+                        <small>Total Destinasi</small>
+                        <strong><?= number_format($totalWisata, 0, ',', '.') ?></strong>
                     </div>
                 </div>
 
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-primary">Simpan Password</button>
-                    <a href="index.php" class="btn btn-outline">Kembali</a>
+                <div class="stat-card">
+                    <div class="stat-icon">🗂️</div>
+                    <div>
+                        <small>Total Kategori</small>
+                        <strong><?= number_format($totalKategori, 0, ',', '.') ?></strong>
+                    </div>
                 </div>
-            </form>
-        </section>
+            </div>
 
-    <?php endif; ?>
+            <section class="panel">
+                <div class="panel-header">
+                    <div>
+                        <h3>📍 Data Wisata</h3>
+                        <p>Cari, edit, atau hapus destinasi wisata.</p>
+                    </div>
+                    <a href="index.php?page=tambah" class="btn">＋ Tambah Data</a>
+                </div>
 
-    <div class="footer">© <?= date('Y') ?> Jelajah Banten · Panel Administrator</div>
+                <form class="search-form" method="GET" action="index.php">
+                    <input name="cari" value="<?= e($cari) ?>"
+                        placeholder="Cari nama, lokasi, atau kategori...">
 
-</main>
+                    <button class="btn" type="submit">🔍 Cari</button>
+
+                    <?php if ($cari !== ''): ?>
+                        <a href="index.php" class="btn btn-secondary">Reset</a>
+                    <?php endif; ?>
+                </form>
+
+                <?php if (count($daftarWisata) > 0): ?>
+
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>No.</th>
+                                    <th>Nama Wisata</th>
+                                    <th>Lokasi</th>
+                                    <th>Kategori</th>
+                                    <th>Harga Tiket</th>
+                                    <th>Jam Buka</th>
+                                    <th>Aksi</th>
+                                </tr>
+                            </thead>
+
+                            <tbody>
+                                <?php foreach ($daftarWisata as $i => $w): ?>
+                                    <tr>
+                                        <td><?= $i + 1 ?></td>
+                                        <td><strong><?= e($w['nama']) ?></strong></td>
+                                        <td><?= e($w['lokasi']) ?></td>
+                                        <td><span class="pill"><?= e($w['kategori']) ?></span></td>
+                                        <td><?= e($w['harga_tiket'] ?: 'Belum diisi') ?></td>
+                                        <td><?= e($w['jam_buka'] ?: 'Belum diisi') ?></td>
+                                        <td>
+                                            <div class="table-actions">
+                                                <a class="btn btn-small"
+                                                    href="index.php?edit=<?= (int)$w['id'] ?>">✏️ Edit</a>
+
+                                                <form method="POST"
+                                                    onsubmit="return confirm('Yakin ingin menghapus wisata ini?')">
+                                                    <input type="hidden" name="csrf_token"
+                                                        value="<?= e($_SESSION['csrf_token']) ?>">
+                                                    <input type="hidden" name="action" value="hapus">
+                                                    <input type="hidden" name="id" value="<?= (int)$w['id'] ?>">
+
+                                                    <button type="submit" class="btn btn-danger btn-small">
+                                                        🗑️ Hapus
+                                                    </button>
+                                                </form>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+
+                <?php else: ?>
+
+                    <div class="empty-state">
+                        <div class="empty-icon">🔎</div>
+                        <strong>Data wisata belum ditemukan.</strong>
+                        <p>
+                            <?= $cari !== ''
+                                ? 'Coba kata pencarian lain atau tampilkan semua data.'
+                                : 'Tambahkan destinasi wisata menggunakan tombol Tambah Wisata.' ?>
+                        </p>
+
+                        <?php if ($cari !== ''): ?>
+                            <a href="index.php" class="btn btn-secondary">Tampilkan Semua Wisata</a>
+                        <?php else: ?>
+                            <a href="index.php?page=tambah" class="btn">＋ Tambah Wisata</a>
+                        <?php endif; ?>
+                    </div>
+
+                <?php endif; ?>
+            </section>
+
+        <?php endif; ?>
+
+    </main>
+</div>
 
 <?php endif; ?>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const jenisJam = document.getElementById('jenis_jam');
+    const pilihanJam = document.getElementById('pilihan_jam');
+    const jamMulai = document.getElementById('jam_mulai');
+    const jamSelesai = document.getElementById('jam_selesai');
+    const jamBuka = document.getElementById('jam_buka');
+
+    // Skrip hanya aktif pada halaman tambah/edit wisata.
+    if (!jenisJam || !pilihanJam || !jamMulai || !jamSelesai || !jamBuka) {
+        return;
+    }
+
+    function perbaruiJam() {
+        if (jenisJam.value === '24') {
+            pilihanJam.style.display = 'none';
+            jamBuka.value = '24 Jam';
+            return;
+        }
+
+        pilihanJam.style.display = 'block';
+        if (jamMulai.value && jamSelesai.value) {
+            jamBuka.value = jamMulai.value + ' - ' + jamSelesai.value + ' WIB';
+        } else {
+            jamBuka.value = '';
+        }
+    }
+
+    jenisJam.addEventListener('change', perbaruiJam);
+    jamMulai.addEventListener('change', perbaruiJam);
+    jamSelesai.addEventListener('change', perbaruiJam);
+    perbaruiJam();
+});
+</script>
 
 </body>
 </html>
